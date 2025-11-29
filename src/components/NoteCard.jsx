@@ -1,9 +1,18 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 
 export function NoteCard({ note, onUpdate, onDelete }) {
   const [isEditing, setIsEditing] = useState(false)
-  const [title, setTitle] = useState(note.title)
-  const [content, setContent] = useState(note.content)
+  const [title, setTitle] = useState(note?.title || '')
+  const [content, setContent] = useState(note?.content || '')
+  const [isExpanded, setIsExpanded] = useState(false)
+
+  // Sync state with note prop when not editing
+  useEffect(() => {
+    if (!isEditing && note) {
+      setTitle(note.title || '')
+      setContent(note.content || '')
+    }
+  }, [note, isEditing])
 
   const handleSave = async () => {
     const { error } = await onUpdate(note.id, title, content)
@@ -27,6 +36,12 @@ export function NoteCard({ note, onUpdate, onDelete }) {
   const formatDate = (dateString) => {
     const date = new Date(dateString)
     return date.toLocaleString()
+  }
+
+  const truncateContent = (text, maxLength = 200) => {
+    if (!text) return 'No content'
+    if (text.length <= maxLength) return text
+    return text.substring(0, maxLength) + '...'
   }
 
   if (isEditing) {
@@ -57,14 +72,6 @@ export function NoteCard({ note, onUpdate, onDelete }) {
       </div>
     )
   }
-
-  const truncateContent = (text, maxLength = 200) => {
-    if (!text) return 'No content'
-    if (text.length <= maxLength) return text
-    return text.substring(0, maxLength) + '...'
-  }
-
-  const [isExpanded, setIsExpanded] = useState(false)
   const shouldTruncate = note.content && note.content.length > 200
   const displayContent = isExpanded || !shouldTruncate 
     ? (note.content || 'No content')
