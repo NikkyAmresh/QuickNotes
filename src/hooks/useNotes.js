@@ -150,6 +150,7 @@ export function useNotes(isAuthenticated = false) {
       
       setNotes(data || [])
       setError(null)
+      setLoading(false)
     } catch (err) {
       console.error('Error fetching notes:', err)
       // Session/auth errors - clear notes and let App.jsx handle redirect
