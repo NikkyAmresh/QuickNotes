@@ -15,8 +15,9 @@ A secure, feature-rich real-time note-taking application built with React, Vite,
 - 🔐 **Picture Password Authentication** - Unique image-based password system (3-5 images in sequence)
 - 🛡️ **Server-Side Authentication** - All authentication validated on the server (cannot be bypassed)
 - 🔒 **Session Management** - Secure server-side sessions with 24-hour expiration
-- 🚫 **Universal Lockout System** - After 3 failed login attempts, account is locked for 1 hour
+- 🚫 **Universal Lockout System** - Server-side lockout function; after 3 failed attempts, account locked for 1 hour
 - 💾 **Server-Side Password Storage** - Passwords stored securely in Supabase database
+- ⚡ **Optimized API Calls** - Throttled and cached to reduce server load
 
 ### User Experience
 - 📝 **Content Truncation** - Long notes are truncated with "Show more/less" functionality
@@ -107,11 +108,13 @@ notes-app/
 5. **Session Validation**: Every request validates the session against the server
 
 ### Lockout System
+- **Server-Side Function**: Uses PostgreSQL `record_failed_attempt()` function for atomic operations
 - **Failed Attempts Tracking**: Stored in `universal_lockout` table
-- **Lockout Trigger**: After 3 failed attempts
+- **Lockout Trigger**: After 3 failed attempts (enforced server-side)
 - **Lockout Duration**: 1 hour (configurable)
 - **Universal Lock**: Applies to all users (single lockout state)
 - **Auto-Unlock**: Automatically unlocks after the lockout period expires
+- **Optimized**: Local timer updates, server sync every 2 minutes
 
 ### Server-Side Validation
 - All authentication checks happen on the server
@@ -214,6 +217,16 @@ See `FIREBASE_SETUP.md` for detailed Firebase setup instructions.
    - `session_token` (TEXT, Unique)
    - `expires_at` (TIMESTAMP)
    - `created_at` (TIMESTAMP)
+
+### Functions
+
+1. **record_failed_attempt()** - Server-side function for atomic lockout operations
+   - Increments failed attempts
+   - Sets lockout if attempts >= 3
+   - Returns current state (attempts, lock status, lockout time)
+   - Prevents race conditions
+
+2. **cleanup_expired_sessions()** - Removes expired sessions from database
 
 ## 🔧 Configuration
 

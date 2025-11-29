@@ -50,7 +50,8 @@ export function PicturePasswordAuth() {
     failedAttempts,
     loading: lockoutLoading,
     recordFailedAttempt,
-    resetLockout
+    resetLockout,
+    checkLockoutStatus
   } = useLockout()
 
   // Don't check auth status here - App.jsx handles it
@@ -129,6 +130,11 @@ export function PicturePasswordAuth() {
       }
     } else {
       // Login attempt - validate against server
+      if (isLocked) {
+        setError('Account is locked. Please wait.')
+        return
+      }
+      
       if (selectedSequence.includes(imageId)) {
         setError('Image already selected')
         return
@@ -139,33 +145,51 @@ export function PicturePasswordAuth() {
       
       // Check if we have the password length to validate
       if (passwordSequence && updated.length === passwordSequence.length) {
-        // Validate password against server
-        const validation = await validatePassword(updated)
-        
-        if (validation.valid) {
-          // Successful login - reset failed attempts on server
-          await resetLockout()
-          // Create server-side session
-          const sessionResult = await createSession()
-          if (sessionResult.success) {
-            setMessage('Access granted!')
-            // Wait a moment then reload to refresh auth status
-            setTimeout(() => {
-              window.location.reload()
-            }, 1000)
-          } else {
-            setError('Failed to create session. Please try again.')
-          }
-        } else {
-          // Failed login attempt - record on server
-          await recordFailedAttempt()
-          const remaining = MAX_ATTEMPTS - (failedAttempts + 1)
+        try {
+          // Validate password against server
+          const validation = await validatePassword(updated)
           
-          if (failedAttempts + 1 >= MAX_ATTEMPTS) {
-            setError(`Too many failed attempts! Account locked for 1 hour.`)
+          if (validation.valid) {
+            // Successful login - reset failed attempts on server
+            await resetLockout()
+            // Create server-side session
+            const sessionResult = await createSession()
+            if (sessionResult.success) {
+              setMessage('Access granted!')
+              // Wait a moment then reload to refresh auth status
+              setTimeout(() => {
+                window.location.reload()
+              }, 1000)
+            } else {
+              setError('Failed to create session. Please try again.')
+            }
           } else {
-            setError(`Incorrect password. ${remaining} attempt${remaining > 1 ? 's' : ''} remaining.`)
+            // Failed login attempt - record on server (server-side function)
+            const lockoutResult = await recordFailedAttempt()
+            
+            if (!lockoutResult) {
+              setError('Error recording attempt. Please try again.')
+              setSelectedSequence([])
+              return
+            }
+            
+            // Get the actual failed attempts count from the server response
+            const currentAttempts = lockoutResult.failedAttempts || 0
+            const isLockedNow = lockoutResult.isLocked || false
+            const remaining = MAX_ATTEMPTS - currentAttempts
+            
+            if (isLockedNow) {
+              setError(`Too many failed attempts! Account locked for 1 hour.`)
+              // Refresh lockout status to show countdown
+              await checkLockoutStatus()
+            } else {
+              setError(`Incorrect password. ${remaining} attempt${remaining > 1 ? 's' : ''} remaining.`)
+            }
+            setSelectedSequence([])
           }
+        } catch (err) {
+          console.error('Error during login:', err)
+          setError('An error occurred. Please try again.')
           setSelectedSequence([])
         }
       }

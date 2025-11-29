@@ -133,22 +133,40 @@ export function useAuth() {
     return () => { mounted = false }
   }, [])
 
-  // Periodically check session validity (only when authenticated)
+  // Periodically check session validity (only when authenticated) - reduced frequency
   useEffect(() => {
     if (!isAuthenticated || !sessionToken) return
 
-    const interval = setInterval(async () => {
-      const token = localStorage.getItem('sessionToken')
-      if (token) {
-        const isValid = await checkAuthStatus(token)
-        // Only update state if session became invalid
-        if (!isValid && isAuthenticated) {
-          // Session expired, state already updated by checkAuthStatus
-        }
-      }
-    }, 60000) // Check every minute
+    let intervalId = null
+    let isChecking = false
+    let lastCheckTime = Date.now()
 
-    return () => clearInterval(interval)
+    const checkSession = async () => {
+      // Prevent too frequent checks (minimum 2 minutes between checks)
+      const timeSinceLastCheck = Date.now() - lastCheckTime
+      if (timeSinceLastCheck < 120000) return // 2 minutes
+      
+      if (isChecking) return
+      isChecking = true
+      lastCheckTime = Date.now()
+      
+      try {
+        const token = localStorage.getItem('sessionToken')
+        if (token) {
+          await checkAuthStatus(token)
+        }
+      } catch (err) {
+        console.error('Error in periodic session check:', err)
+      } finally {
+        isChecking = false
+      }
+    }
+
+    intervalId = setInterval(checkSession, 300000) // Check every 5 minutes (reduced frequency)
+
+    return () => {
+      if (intervalId) clearInterval(intervalId)
+    }
   }, [isAuthenticated, sessionToken])
 
   return {

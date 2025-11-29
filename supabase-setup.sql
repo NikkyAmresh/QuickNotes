@@ -104,3 +104,67 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- Server-side function to record failed login attempt and handle lockout
+CREATE OR REPLACE FUNCTION record_failed_attempt()
+RETURNS TABLE(
+  failed_attempts INTEGER,
+  is_locked BOOLEAN,
+  lockout_until TIMESTAMP WITH TIME ZONE
+) AS $$
+DECLARE
+  current_record RECORD;
+  new_attempts INTEGER;
+  should_lock BOOLEAN;
+  lockout_time TIMESTAMP WITH TIME ZONE;
+BEGIN
+  -- Get current lockout state
+  SELECT * INTO current_record
+  FROM universal_lockout
+  WHERE id = 1;
+
+  -- Check if already locked and lockout hasn't expired
+  IF current_record.lockout_until IS NOT NULL AND current_record.lockout_until > NOW() THEN
+    -- Already locked, return current state
+    RETURN QUERY SELECT 
+      current_record.failed_attempts,
+      TRUE,
+      current_record.lockout_until;
+    RETURN;
+  END IF;
+
+  -- Calculate new attempt count
+  new_attempts := COALESCE(current_record.failed_attempts, 0) + 1;
+  should_lock := new_attempts >= 3; -- MAX_ATTEMPTS = 3
+  
+  -- Set lockout time if needed (1 hour from now)
+  IF should_lock THEN
+    lockout_time := NOW() + INTERVAL '1 hour';
+  ELSE
+    lockout_time := NULL;
+  END IF;
+
+  -- Update or insert lockout record
+  IF current_record IS NULL THEN
+    INSERT INTO universal_lockout (id, failed_attempts, lockout_until, last_attempt_at, updated_at)
+    VALUES (1, new_attempts, lockout_time, NOW(), NOW());
+  ELSE
+    UPDATE universal_lockout
+    SET 
+      failed_attempts = new_attempts,
+      lockout_until = lockout_time,
+      last_attempt_at = NOW(),
+      updated_at = NOW()
+    WHERE id = 1;
+  END IF;
+
+  -- Return the result
+  RETURN QUERY SELECT 
+    new_attempts,
+    should_lock,
+    lockout_time;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Grant execute permission
+GRANT EXECUTE ON FUNCTION record_failed_attempt() TO anon, authenticated;
+

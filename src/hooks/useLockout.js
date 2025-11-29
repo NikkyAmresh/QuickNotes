@@ -11,8 +11,18 @@ export function useLockout() {
   const [failedAttempts, setFailedAttempts] = useState(0)
   const [loading, setLoading] = useState(true)
 
+  // Throttle checkLockoutStatus to prevent rapid calls
+  let lastCheckTime = 0
+  const CHECK_THROTTLE_MS = 2000 // Minimum 2 seconds between checks
+
   // Check lockout status from server (universal lockout)
-  const checkLockoutStatus = async () => {
+  const checkLockoutStatus = async (force = false) => {
+    const now = Date.now()
+    if (!force && (now - lastCheckTime) < CHECK_THROTTLE_MS) {
+      return // Skip if called too soon
+    }
+    lastCheckTime = now
+
     try {
       const { data, error } = await supabase
         .from('universal_lockout')
@@ -54,43 +64,52 @@ export function useLockout() {
     }
   }
 
-  // Record a failed login attempt (universal lockout)
+  // Record a failed login attempt (server-side function)
   const recordFailedAttempt = async () => {
     try {
-      const { data: existing } = await supabase
-        .from('universal_lockout')
-        .select('*')
-        .eq('id', UNIVERSAL_LOCKOUT_ID)
-        .single()
+      // Call server-side function to handle lockout logic
+      const { data, error } = await supabase.rpc('record_failed_attempt')
 
-      const newAttempts = (existing?.failed_attempts || 0) + 1
-      const shouldLock = newAttempts >= MAX_ATTEMPTS
-      const lockoutUntil = shouldLock
-        ? new Date(Date.now() + LOCKOUT_DURATION_MS).toISOString()
-        : null
-
-      // Update the universal lockout record
-      const { data, error } = await supabase
-        .from('universal_lockout')
-        .update({
-          failed_attempts: newAttempts,
-          lockout_until: lockoutUntil,
-          last_attempt_at: new Date().toISOString(),
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', UNIVERSAL_LOCKOUT_ID)
-        .select()
-        .single()
-
-      if (error) throw error
-
-      if (shouldLock) {
-        setIsLocked(true)
-        setLockoutTimeLeft(LOCKOUT_DURATION_MS)
+      if (error) {
+        console.error('Error calling record_failed_attempt:', error)
+        throw error
       }
+
+      if (!data || data.length === 0) {
+        throw new Error('No data returned from server')
+      }
+
+      const result = data[0]
+      const newAttempts = result.failed_attempts || 0
+      const isLocked = result.is_locked || false
+      const lockoutUntil = result.lockout_until
+
+      // Update local state
       setFailedAttempts(newAttempts)
+      
+      if (isLocked && lockoutUntil) {
+        setIsLocked(true)
+        const lockoutTime = new Date(lockoutUntil)
+        const now = new Date()
+        setLockoutTimeLeft(Math.max(0, lockoutTime.getTime() - now.getTime()))
+      } else {
+        setIsLocked(false)
+        setLockoutTimeLeft(0)
+      }
+      
+      return { 
+        failedAttempts: newAttempts, 
+        isLocked: isLocked,
+        lockoutUntil: lockoutUntil
+      }
     } catch (err) {
       console.error('Error recording failed attempt:', err)
+      // Return current state on error
+      return { 
+        failedAttempts: failedAttempts, 
+        isLocked: isLocked,
+        lockoutUntil: null
+      }
     }
   }
 
@@ -121,11 +140,28 @@ export function useLockout() {
     checkLockoutStatus()
   }, [])
 
-  // Update countdown timer every second when locked
+  // Update countdown timer (slower frequency to reduce API calls)
   useEffect(() => {
     if (!isLocked) return
 
-    const interval = setInterval(async () => {
+    // Calculate time left locally without API call
+    const updateTimer = () => {
+      setLockoutTimeLeft((prev) => {
+        const newTime = prev - 1000
+        if (newTime <= 0) {
+          // Check server only when timer expires
+          checkLockoutStatus()
+          return 0
+        }
+        return newTime
+      })
+    }
+
+    // Update every second locally
+    const interval = setInterval(updateTimer, 1000)
+
+    // Check server every 2 minutes to sync (reduced frequency)
+    const syncInterval = setInterval(async () => {
       const { data } = await supabase
         .from('universal_lockout')
         .select('lockout_until')
@@ -144,9 +180,12 @@ export function useLockout() {
           await resetLockout()
         }
       }
-    }, 1000)
+    }, 120000) // Check server every 2 minutes instead of every second
 
-    return () => clearInterval(interval)
+    return () => {
+      clearInterval(interval)
+      clearInterval(syncInterval)
+    }
   }, [isLocked])
 
   return {
