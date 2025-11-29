@@ -80,26 +80,38 @@ export function usePassword() {
     }
   }
 
-  // Validate password against server
+  // Validate password against server (with server-side lockout check)
   const validatePassword = async (sequence) => {
     try {
-      const { data, error } = await supabase
-        .from('app_password')
-        .select('password_sequence')
-        .eq('id', PASSWORD_ID)
-        .single()
+      // Use server-side function that checks lockout and validates password atomically
+      const { data, error } = await supabase.rpc('validate_password_with_lockout', {
+        sequence: sequence
+      })
 
       if (error) {
+        console.error('Error validating password:', error)
         return { valid: false, error: error.message }
       }
 
-      if (!data || !data.password_sequence) {
-        return { valid: false, error: 'Password not set' }
+      if (!data || data.length === 0) {
+        return { valid: false, error: 'No response from server' }
       }
 
-      // Compare sequences
-      const isValid = JSON.stringify(data.password_sequence) === JSON.stringify(sequence)
-      return { valid: isValid, error: null }
+      const result = data[0]
+      
+      if (result.is_locked) {
+        return { 
+          valid: false, 
+          error: result.error_message || 'Account is locked. Please wait.',
+          isLocked: true 
+        }
+      }
+
+      return { 
+        valid: result.is_valid || false, 
+        error: result.error_message || null,
+        isLocked: false
+      }
     } catch (err) {
       console.error('Error validating password:', err)
       return { valid: false, error: err.message }

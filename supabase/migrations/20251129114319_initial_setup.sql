@@ -1,5 +1,5 @@
 -- Real-Time Notes App - Supabase Setup SQL
--- Run this in your Supabase SQL Editor
+-- Migration: Initial database setup with security functions
 
 -- Create notes table
 CREATE TABLE IF NOT EXISTS notes (
@@ -192,8 +192,17 @@ GRANT EXECUTE ON FUNCTION create_note(TEXT, TEXT, TEXT) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION update_note(TEXT, UUID, TEXT, TEXT) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION delete_note(TEXT, UUID) TO anon, authenticated;
 
--- Enable real-time for the notes table
-ALTER PUBLICATION supabase_realtime ADD TABLE notes;
+-- Enable real-time for the notes table (if not already added)
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_publication_tables 
+    WHERE pubname = 'supabase_realtime' 
+    AND tablename = 'notes'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE notes;
+  END IF;
+END $$;
 
 -- Create an index on created_at for better query performance
 CREATE INDEX IF NOT EXISTS idx_notes_created_at ON notes(created_at DESC);

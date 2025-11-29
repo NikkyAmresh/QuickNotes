@@ -60,11 +60,16 @@ export function useNotes(isAuthenticated = false) {
       if (!mounted) return
       
       try {
+        // Validate session before setting up notes
+        await validateSession()
+        
+        if (!mounted) return
+
         await fetchNotes()
 
         if (!mounted) return
 
-        // Set up real-time subscription
+        // Set up real-time subscription (only if authenticated)
         channel = supabase
           .channel('notes-changes')
           .on(
@@ -76,6 +81,15 @@ export function useNotes(isAuthenticated = false) {
             },
             (payload) => {
               if (!mounted) return
+              
+              // Validate session before processing real-time updates
+              validateSession().catch(() => {
+                // Session invalid, stop processing updates
+                if (channel) {
+                  supabase.removeChannel(channel)
+                }
+                window.location.reload()
+              })
               
               if (payload.eventType === 'INSERT') {
                 setNotes((prev) => [...prev, payload.new])
@@ -96,6 +110,10 @@ export function useNotes(isAuthenticated = false) {
       } catch (err) {
         if (mounted) {
           console.error('Error setting up notes:', err)
+          // If session invalid, reload
+          if (err.message.includes('authenticated') || err.message.includes('session') || err.message.includes('Invalid') || err.message.includes('expired')) {
+            window.location.reload()
+          }
         }
       }
     }
@@ -112,27 +130,18 @@ export function useNotes(isAuthenticated = false) {
 
   const fetchNotes = async () => {
     try {
-      // Validate session before fetching
-      try {
-        await validateSession()
-      } catch (sessionErr) {
-        // Session invalid - don't fetch notes, but don't show error repeatedly
-        if (sessionErr.message.includes('authenticated') || sessionErr.message.includes('session')) {
-          setNotes([])
-          setLoading(false)
-          // Don't set error - let App.jsx handle auth redirect
-          return
-        }
-        throw sessionErr
+      const token = localStorage.getItem('sessionToken')
+      if (!token) {
+        throw new Error('Not authenticated')
       }
       
       setLoading(true)
       setError(null)
       
-      const { data, error } = await supabase
-        .from('notes')
-        .select('*')
-        .order('created_at', { ascending: false })
+      // Use server-side function that enforces authentication
+      const { data, error } = await supabase.rpc('get_notes', {
+        session_token_param: token
+      })
 
       if (error) {
         console.error('Supabase error fetching notes:', error)
@@ -143,69 +152,107 @@ export function useNotes(isAuthenticated = false) {
       setError(null)
     } catch (err) {
       console.error('Error fetching notes:', err)
-      // Only set error if it's not a session/auth error
-      if (!err.message.includes('authenticated') && !err.message.includes('session') && !err.message.includes('Invalid')) {
-        setError(err.message)
+      // Session/auth errors - clear notes and let App.jsx handle redirect
+      if (err.message.includes('authenticated') || err.message.includes('session') || err.message.includes('Invalid') || err.message.includes('expired') || err.message.includes('Invalid or expired session')) {
+        setNotes([])
+        setError(null) // Don't show error, just redirect
+        setLoading(false)
+        // Trigger page reload to force auth check
+        window.location.reload()
+        return
       }
+      setError(err.message)
       setNotes([])
-    } finally {
       setLoading(false)
     }
   }
 
   const createNote = async (title, content) => {
     try {
-      await validateSession() // Validate session before creating
-      const { data, error } = await supabase
-        .from('notes')
-        .insert([{ title, content }])
-        .select()
-        .single()
+      const token = localStorage.getItem('sessionToken')
+      if (!token) {
+        throw new Error('Not authenticated')
+      }
+      
+      // Use server-side function that enforces authentication
+      const { data, error } = await supabase.rpc('create_note', {
+        session_token_param: token,
+        note_title: title,
+        note_content: content
+      })
 
       if (error) throw error
       
       // Real-time subscription will handle the update, but we can also add it immediately
-      if (data) {
-        setNotes((prev) => [data, ...prev])
+      if (data && data.length > 0) {
+        setNotes((prev) => [data[0], ...prev])
+        return { data: data[0], error: null }
       }
       
-      return { data, error: null }
+      return { data: null, error: 'No data returned' }
     } catch (err) {
       console.error('Error creating note:', err)
+      // If session invalid, reload to force auth
+      if (err.message.includes('authenticated') || err.message.includes('session') || err.message.includes('Invalid') || err.message.includes('expired') || err.message.includes('Invalid or expired session')) {
+        window.location.reload()
+      }
       return { data: null, error: err.message }
     }
   }
 
   const updateNote = async (id, title, content) => {
     try {
-      await validateSession() // Validate session before updating
-      const { data, error } = await supabase
-        .from('notes')
-        .update({ title, content, updated_at: new Date().toISOString() })
-        .eq('id', id)
-        .select()
-        .single()
+      const token = localStorage.getItem('sessionToken')
+      if (!token) {
+        throw new Error('Not authenticated')
+      }
+      
+      // Use server-side function that enforces authentication
+      const { data, error } = await supabase.rpc('update_note', {
+        session_token_param: token,
+        note_id: id,
+        note_title: title,
+        note_content: content
+      })
 
       if (error) throw error
-      return { data, error: null }
+      
+      if (data && data.length > 0) {
+        return { data: data[0], error: null }
+      }
+      
+      return { data: null, error: 'No data returned' }
     } catch (err) {
       console.error('Error updating note:', err)
+      // If session invalid, reload to force auth
+      if (err.message.includes('authenticated') || err.message.includes('session') || err.message.includes('Invalid') || err.message.includes('expired') || err.message.includes('Invalid or expired session')) {
+        window.location.reload()
+      }
       return { data: null, error: err.message }
     }
   }
 
   const deleteNote = async (id) => {
     try {
-      await validateSession() // Validate session before deleting
-      const { error } = await supabase
-        .from('notes')
-        .delete()
-        .eq('id', id)
+      const token = localStorage.getItem('sessionToken')
+      if (!token) {
+        throw new Error('Not authenticated')
+      }
+      
+      // Use server-side function that enforces authentication
+      const { data, error } = await supabase.rpc('delete_note', {
+        session_token_param: token,
+        note_id: id
+      })
 
       if (error) throw error
       return { error: null }
     } catch (err) {
       console.error('Error deleting note:', err)
+      // If session invalid, reload to force auth
+      if (err.message.includes('authenticated') || err.message.includes('session') || err.message.includes('Invalid') || err.message.includes('expired') || err.message.includes('Invalid or expired session')) {
+        window.location.reload()
+      }
       return { error: err.message }
     }
   }

@@ -146,8 +146,23 @@ export function PicturePasswordAuth() {
       // Check if we have the password length to validate
       if (passwordSequence && updated.length === passwordSequence.length) {
         try {
-          // Validate password against server
+          // Check lockout status first (server-side)
+          if (isLocked) {
+            setError('Account is locked. Please wait.')
+            setSelectedSequence([])
+            return
+          }
+
+          // Validate password against server (includes server-side lockout check)
           const validation = await validatePassword(updated)
+          
+          // Check if validation failed due to lockout
+          if (validation.isLocked) {
+            setError('Account is locked. Please wait.')
+            setSelectedSequence([])
+            await checkLockoutStatus(true) // Force refresh lockout status
+            return
+          }
           
           if (validation.valid) {
             // Successful login - reset failed attempts on server
